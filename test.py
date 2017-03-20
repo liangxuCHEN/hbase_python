@@ -28,7 +28,7 @@ def test_connection():
 def test_table_listing(table_name):
     names = connection.tables()
     assert_is_instance(names, list)
-    print names
+    print (names)
     assert_in(table_name, names)
 
 
@@ -44,18 +44,41 @@ def test_create_table(table_name):
 
 
 def test_families(table_name):
-    table = connection.table(table_name)
-    assert_is_not_none(table)
+    table_tmp = connection.table(table_name)
+    assert_is_not_none(table_tmp)
     families = table.families()
     for name, fdesc in six.iteritems(families):
-        print name, fdesc
+        print (name, fdesc)
+
+
+def test_get_row(table_name, row, column):
+    table_tmp = connection.table(table_name)
+    print (table_tmp.row(row, columns=column))
+
+
+def test_enable_table(table_name):
+    print (connection.is_table_enabled(table_name))
+    connection.disable_table(table_name)
+    print (connection.is_table_enabled(table_name))
+    connection.enable_table(table_name)
+    print (connection.is_table_enabled(table_name))
+
+
+def test_delete_table(table_name):
+    test_table_listing(table_name)
+    connection.disable_table(table_name)
+    connection.delete_table(table_name)
+    test_table_listing(table_name)
+
 
 if __name__ == '__main__':
     import logging
-
     logging.basicConfig(level=logging.DEBUG)
     test_connection()
-    #test_table_listing()
-    #test_create_table('table2')
-    test_families('students')
+    # test_table_listing()
+    # test_create_table('table2')
+    # test_families('students')
+    # test_get_row('students', b'Tom', [b'basicInfo:age'])
+    # test_enable_table('table2')
+    test_delete_table('table2')
 

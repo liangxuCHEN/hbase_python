@@ -76,12 +76,12 @@ class Table(object):
 
         if timestamp is None:
             rows = self.connection.client.getRowWithColumns(
-                self.name, row, columns, {})
+                self.name, row, columns)
         else:
             if not isinstance(timestamp, Integral):
                 raise TypeError("'timestamp' must be an integer")
             rows = self.connection.client.getRowWithColumnsTs(
-                self.name, row, columns, timestamp, {})
+                self.name, row, columns, timestamp)
 
         if not rows:
             return {}

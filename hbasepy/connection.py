@@ -104,9 +104,6 @@ class Connection(object):
         """
         return Table(name, self)
 
-
-
-
     def tables(self):
         """Return a list of table names available in this HBase instance.
 
@@ -152,3 +149,36 @@ class Connection(object):
             column_descriptors.append(ColumnDescriptor(**kwargs))
 
         self.client.createTable(name, column_descriptors)
+
+    def delete_table(self, name):
+        """Delete the specified table.
+        In HBase, a table always needs to be disabled before it can be
+        deleted. If the `disable` argument is `True`, this method first
+        disables the table if it wasn't already and then deletes it.
+        :param str name: The table name
+        """
+        self.client.deleteTable(name)
+
+    def enable_table(self, name):
+        """Enable the specified table.
+
+        :param str name: The table name
+        """
+        self.client.enableTable(name)
+
+    def disable_table(self, name):
+        """Disable the specified table.
+
+        :param str name: The table name
+        """
+        self.client.disableTable(name)
+
+    def is_table_enabled(self, name):
+        """Return whether the specified table is enabled.
+
+        :param str name: The table name
+
+        :return: whether the table is enabled
+        :rtype: bool
+        """
+        return self.client.isTableEnabled(name)
