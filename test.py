@@ -4,7 +4,7 @@ from nose.tools import (
     assert_is_instance,
     assert_is_not_none,
     assert_raises,
-    assert_dict_equal,
+    assert_equal
 )
 from hbasepy import Connection
 import six
@@ -39,7 +39,7 @@ def test_create_table(table_name):
     cfs = {
         'cf1': {},
         'cf2': None,
-        'cf3': {'max_versions': 1},
+        'cf3': {'max_versions': 3},
     }
     connection.create_table(table_name, families=cfs)
 
@@ -161,6 +161,34 @@ def test_batch_context_managers(table_name):
     print(res)
 
 
+def test_cells(table_name):
+    table_tmp = connection.table(table_name)
+    row_key = b'cell-test'
+    col = b'cf1:col1'
+
+    # table_tmp.put(row_key, {col: b'old'}, timestamp=1234)
+    # table_tmp.put(row_key, {col: b'supnew'})
+
+    with assert_raises(TypeError):
+        table_tmp.cells(row_key, col, versions='invalid')
+
+    with assert_raises(TypeError):
+        table_tmp.cells(row_key, col, versions=3, timestamp='invalid')
+
+    with assert_raises(ValueError):
+        table_tmp.cells(row_key, col, versions=0)
+
+    results = table_tmp.cells(row_key, col, versions=1)
+    assert_equal(len(results), 1)
+    print(results)
+
+    results = table_tmp.cells(row_key, col)
+    print(results)
+    # 时间之前的版本
+    results = table_tmp.cells(row_key, col, timestamp=1490091432045, include_timestamp=True)
+    print(results)
+
+
 if __name__ == '__main__':
     import logging
     logging.basicConfig(level=logging.DEBUG)
@@ -168,7 +196,7 @@ if __name__ == '__main__':
     # test_table_listing()
     # test_create_table('table2')
     # test_invalid_table_create()
-    # test_families('students')
+    # test_families('table2')
     # test_get_row('students', b'Tom', [b'basicInfo:age'])
     # test_enable_table('table2')
     # test_delete_table('table2')
@@ -177,6 +205,7 @@ if __name__ == '__main__':
     # test_atomic_counters()
     # test_batch('mytable')
     # test_batch_context_managers('mytable')
+    # test_cells('table2')
 
 
 

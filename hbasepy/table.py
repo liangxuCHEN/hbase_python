@@ -96,6 +96,49 @@ class Table(object):
 
         return make_row(rows[0].columns, include_timestamp)
 
+    def cells(self, row, column, versions=None, timestamp=None,
+              include_timestamp=False):
+        """Retrieve multiple versions of a single cell from the table.
+
+        This method retrieves multiple versions of a cell (if any).
+
+        The `versions` argument defines how many cell versions to
+        retrieve at most.
+
+        The `timestamp` and `include_timestamp` arguments behave exactly the
+        same as for :py:meth:`row`.
+
+        :param str row: the row key
+        :param str column: the column name
+        :param int versions: the maximum number of versions to retrieve
+        :param int timestamp: timestamp (optional)
+        :param bool include_timestamp: whether timestamps are returned
+
+        :return: cell values
+        :rtype: list of values
+        """
+        if versions is None:
+            versions = (2 ** 31) - 1  # Thrift type is i32
+        elif not isinstance(versions, int):
+            raise TypeError("'versions' argument must be a number or None")
+        elif versions < 1:
+            raise ValueError(
+                "'versions' argument must be at least 1 (or None)")
+
+        if timestamp is None:
+            cells = self.connection.client.getVer(
+                self.name, row, column, versions)
+        else:
+            if not isinstance(timestamp, Integral):
+                raise TypeError("'timestamp' must be an integer")
+            cells = self.connection.client.getVerTs(
+                self.name, row, column, timestamp, versions)
+
+        return [
+            (c.value, c.timestamp) if include_timestamp else c.value
+            for c in cells
+            ]
+
     def regions(self):
         """Retrieve the regions for this table.
 
