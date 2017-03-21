@@ -54,4 +54,8 @@ jps
 </code></pre>
 如果看到 ThriftServer， HMaster， 就代表成功启动服务。
 
+使用zookeeper管理hbase， 打开以下服务
 
+<pre><code>
+hbase thrift start -threadpool
+</code></pre>

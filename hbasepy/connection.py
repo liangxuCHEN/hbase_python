@@ -182,3 +182,14 @@ class Connection(object):
         :rtype: bool
         """
         return self.client.isTableEnabled(name)
+
+    def compact_table(self, name, major=False):
+        """Compact the specified table.
+
+        :param str name: The table name
+        :param bool major: Whether to perform a major compaction.
+        """
+        if major:
+            self.client.majorCompact(name)
+        else:
+            self.client.compact(name)
