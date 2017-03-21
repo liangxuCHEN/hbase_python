@@ -4,6 +4,7 @@ from nose.tools import (
     assert_is_instance,
     assert_is_not_none,
     assert_raises,
+    assert_dict_equal,
 )
 from hbasepy import Connection
 import six
@@ -112,6 +113,54 @@ def test_atomic_counters():
     print (table_tmp.counter_inc(row, column, 3))
 
 
+def test_batch(table_name):
+    table_tmp = connection.table(table_name)
+    b = table_tmp.batch()
+    b.put(b'row1', {b'cf:col1': b'value1',
+                    b'cf:col2': b'value2'})
+    b.send()
+
+    # b = table_tmp.batch(timestamp=1490078461188)
+    b.put(b'row2', {b'cf:col5': b'value5'})
+    b.send()
+
+    b.delete(b'row2')
+    b.delete(b'row1', [b'cf1:col2'])
+    b.send()
+
+
+def test_batch_context_managers(table_name):
+    table_tmp = connection.table(table_name)
+
+    with table_tmp.batch() as b:
+        b.put(b'row4', {b'cf:col3': b'value3'})
+        b.put(b'row5', {b'cf:col4': b'value4'})
+        b.put(b'row', {b'cf:col1': b'value1'})
+        b.delete(b'row', [b'cf:col1'])
+        b.put(b'row', {b'cf:col2': b'value2'})
+
+    with table_tmp.batch(timestamp=1490082327736) as b:
+        b.put(b'row', {b'cf:col2': b'somevalue'})
+        b.delete(b'row', [b'cf:c3'])
+
+    with assert_raises(ValueError):
+        with table_tmp.batch(transaction=True) as b:
+            b.put(b'fooz', {b'cf1:bar': b'baz'})
+            raise ValueError
+
+    print (table_tmp.row(b'foo', [b'cf:bar']))
+
+    with table_tmp.batch(batch_size=5) as b:
+        for i in range(10):
+            b.put(('row-batch1-%03d' % i).encode('ascii'),
+                  {b'cf:': str(i).encode('ascii')})
+
+    res = list(table_tmp.scan())
+    print(res)
+    res = list(table_tmp.scan(row_prefix='row-batch1'))
+    print(res)
+
+
 if __name__ == '__main__':
     import logging
     logging.basicConfig(level=logging.DEBUG)
@@ -123,9 +172,11 @@ if __name__ == '__main__':
     # test_get_row('students', b'Tom', [b'basicInfo:age'])
     # test_enable_table('table2')
     # test_delete_table('table2')
-    #test_table_regions('students')
+    # test_table_regions('students')
     # test_put('students')
-    test_atomic_counters()
+    # test_atomic_counters()
+    # test_batch('mytable')
+    # test_batch_context_managers('mytable')
 
 
 

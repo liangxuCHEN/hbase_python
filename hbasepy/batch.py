@@ -85,6 +85,29 @@ class Batch(object):
         if self._batch_size and self._mutation_count >= self._batch_size:
             self.send()
 
+    def delete(self, row, columns=None):
+        """Delete data from the table.
+
+        See :py:meth:`Table.put` for a description of the `row`, `data`,
+            :py:meth:`Table.batch`.
+        """
+        # Work-around Thrift API limitation: the mutation API can only
+        # delete specified columns, not complete rows, so just list the
+        # column families once and cache them for later use by the same
+        # batch instance.
+        if columns is None:
+            if self._families is None:
+                self._families = self._table._column_family_names()
+            columns = self._families
+
+        self._mutations[row].extend(
+            Mutation(isDelete=True, column=column)
+            for column in columns)
+
+        self._mutation_count += len(columns)
+        if self._batch_size and self._mutation_count >= self._batch_size:
+            self.send()
+
     def __enter__(self):
         """Called upon entering a ``with`` block"""
         return self

@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 pack_i64 = Struct('>q').pack
 
+
 def make_row(cell_map, include_timestamp):
     """Make a row dict for a cell mapping like ttypes.TRowResult.columns."""
     return {
@@ -63,6 +64,11 @@ class Table(object):
             families[name] = thrift_type_to_dict(descriptor)
         return families
 
+    def _column_family_names(self):
+        """Retrieve the column family names for this table (internal use)"""
+        names = self.connection.client.getColumnDescriptors(self.name).keys()
+        return [name.rstrip(b':') for name in names]
+
     def row(self, row, columns=None, timestamp=None, include_timestamp=False):
         """Retrieve a single row of data.
         :param str row: the row key
@@ -99,6 +105,174 @@ class Table(object):
         regions = self.connection.client.getTableRegions(self.name)
         return [thrift_type_to_dict(r) for r in regions]
 
+    def scan(self, row_start=None, row_stop=None, row_prefix=None,
+             columns=None, filter=None, timestamp=None,
+             include_timestamp=False, batch_size=1000, scan_batching=None,
+             limit=None, sorted_columns=False, reverse=False):
+        """Create a scanner for data in the table.
+
+        This method returns an iterable that can be used for looping over the
+        matching rows. Scanners can be created in two ways:
+
+        * The `row_start` and `row_stop` arguments specify the row keys where
+          the scanner should start and stop. It does not matter whether the
+          table contains any rows with the specified keys: the first row after
+          `row_start` will be the first result, and the last row before
+          `row_stop` will be the last result. Note that the start of the range
+          is inclusive, while the end is exclusive.
+
+          Both `row_start` and `row_stop` can be `None` to specify the start
+          and the end of the table respectively. If both are omitted, a full
+          table scan is done. Note that this usually results in severe
+          performance problems.
+
+        * Alternatively, if `row_prefix` is specified, only rows with row keys
+          matching the prefix will be returned. If given, `row_start` and
+          `row_stop` cannot be used.
+
+        The `columns`, `timestamp` and `include_timestamp` arguments behave
+        exactly the same as for :py:meth:`row`.
+
+        The `filter` argument may be a filter string that will be applied at
+        the server by the region servers.
+
+        If `limit` is given, at most `limit` results will be returned.
+
+        The `batch_size` argument specifies how many results should be
+        retrieved per batch when retrieving results from the scanner. Only set
+        this to a low value (or even 1) if your data is large, since a low
+        batch size results in added round-trips to the server.
+
+        The optional `scan_batching` is for advanced usage only; it
+        translates to `Scan.setBatching()` at the Java side (inside the
+        Thrift server). By setting this value rows may be split into
+        partial rows, so result rows may be incomplete, and the number
+        of results returned by te scanner may no longer correspond to
+        the number of rows matched by the scan.
+
+        If `sorted_columns` is `True`, the columns in the rows returned
+        by this scanner will be retrieved in sorted order, and the data
+        will be stored in `OrderedDict` instances.
+
+        If `reverse` is `True`, the scanner will perform the scan in reverse.
+        This means that `row_start` must be lexicographically after `row_stop`.
+        Note that the start of the range is inclusive, while the end is
+        exclusive just as in the forward scan.
+
+        **Compatibility notes:**
+
+        * The `filter` argument is only available when using HBase 0.92
+          (or up). In HBase 0.90 compatibility mode, specifying
+          a `filter` raises an exception.
+
+        * The `sorted_columns` argument is only available when using
+          HBase 0.96 (or up).
+
+        * The `reverse` argument is only available when using HBase 0.98
+          (or up).
+
+        :param str row_start: the row key to start at (inclusive)
+        :param str row_stop: the row key to stop at (exclusive)
+        :param str row_prefix: a prefix of the row key that must match
+        :param list_or_tuple columns: list of columns (optional)
+        :param str filter: a filter string (optional)
+        :param int timestamp: timestamp (optional)
+        :param bool include_timestamp: whether timestamps are returned
+        :param int batch_size: batch size for retrieving results
+        :param bool scan_batching: server-side scan batching (optional)
+        :param int limit: max number of rows to return
+        :param bool sorted_columns: whether to return sorted columns
+        :param bool reverse: whether to perform scan in reverse
+
+        :return: generator yielding the rows matching the scan
+        :rtype: iterable of `(row_key, row_data)` tuples
+        """
+        if batch_size < 1:
+            raise ValueError("'batch_size' must be >= 1")
+
+        if limit is not None and limit < 1:
+            raise ValueError("'limit' must be >= 1")
+
+        if scan_batching is not None and scan_batching < 1:
+            raise ValueError("'scan_batching' must be >= 1")
+
+        if sorted_columns and self.connection.compat < '0.96':
+            raise NotImplementedError(
+                "'sorted_columns' is only supported in HBase >= 0.96")
+
+        if reverse and self.connection.compat < '0.98':
+            raise NotImplementedError(
+                "'reverse' is only supported in HBase >= 0.98")
+
+        if row_prefix is not None:
+            if row_start is not None or row_stop is not None:
+                raise TypeError(
+                    "'row_prefix' cannot be combined with 'row_start' "
+                    "or 'row_stop'")
+
+            if reverse:
+                row_start = bytes_increment(row_prefix)
+                row_stop = row_prefix
+            else:
+                row_start = row_prefix
+                row_stop = bytes_increment(row_prefix)
+
+        if row_start is None:
+            row_start = ''
+
+        if filter is not None:
+            raise NotImplementedError(
+                "'filter' is not supported in HBase 0.90")
+
+        if row_stop is None:
+            if timestamp is None:
+                scan_id = self.connection.client.scannerOpen(
+                    self.name, row_start, columns)
+            else:
+                scan_id = self.connection.client.scannerOpenTs(
+                    self.name, row_start, columns, timestamp)
+        else:
+            if timestamp is None:
+                scan_id = self.connection.client.scannerOpenWithStop(
+                    self.name, row_start, row_stop, columns)
+            else:
+                scan_id = self.connection.client.scannerOpenWithStopTs(
+                    self.name, row_start, row_stop, columns, timestamp)
+        logger.debug("Opened scanner (id=%d) on '%s'", scan_id, self.name)
+
+        n_returned = n_fetched = 0
+        try:
+            while True:
+                if limit is None:
+                    how_many = batch_size
+                else:
+                    how_many = min(batch_size, limit - n_returned)
+
+                items = self.connection.client.scannerGetList(
+                    scan_id, how_many)
+
+                if not items:
+                    return  # scan has finished
+
+                n_fetched += len(items)
+
+                for n_returned, item in enumerate(items, n_returned + 1):
+                    if sorted_columns:
+                        row = make_ordered_row(item.sortedColumns,
+                                               include_timestamp)
+                    else:
+                        row = make_row(item.columns, include_timestamp)
+
+                    yield item.row, row
+
+                    if limit is not None and n_returned == limit:
+                        return  # scan has finished
+        finally:
+            self.connection.client.scannerClose(scan_id)
+            logger.debug(
+                "Closed scanner (id=%d) on '%s' (%d returned, %d fetched)",
+                scan_id, self.name, n_returned, n_fetched)
+
     def put(self, row, data, timestamp=None):
         """Store data in the table.
 
@@ -118,6 +292,22 @@ class Table(object):
         """
         with self.batch(timestamp=timestamp) as batch:
             batch.put(row, data)
+
+    def delete(self, row, columns=None, timestamp=None):
+        """Delete data from the table.
+
+        This method deletes all columns for the row specified by `row`, or only
+        some columns if the `columns` argument is specified.
+
+        Note that, in many situations, :py:meth:`batch()` is a more appropriate
+        method to manipulate data.
+
+        :param str row: the row key
+        :param list_or_tuple columns: list of columns (optional)
+        :param int timestamp: timestamp (optional)
+        """
+        with self.batch(timestamp=timestamp) as batch:
+            batch.delete(row, columns)
 
     def batch(self, timestamp=None, batch_size=None, transaction=False):
         """Create a new batch operation for this table.
