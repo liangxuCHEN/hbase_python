@@ -7,6 +7,7 @@ from struct import Struct
 from six import iteritems
 from .tool import thrift_type_to_dict, bytes_increment, OrderedDict
 from .batch import Batch
+from hbase_thrift.ttypes import TScan
 
 logger = logging.getLogger(__name__)
 
@@ -84,12 +85,12 @@ class Table(object):
 
         if timestamp is None:
             rows = self.connection.client.getRowWithColumns(
-                self.name, row, columns)
+                self.name, row, columns, {})
         else:
             if not isinstance(timestamp, Integral):
                 raise TypeError("'timestamp' must be an integer")
             rows = self.connection.client.getRowWithColumnsTs(
-                self.name, row, columns, timestamp)
+                self.name, row, columns, timestamp, {})
 
         if not rows:
             return {}
@@ -127,12 +128,12 @@ class Table(object):
 
         if timestamp is None:
             cells = self.connection.client.getVer(
-                self.name, row, column, versions)
+                self.name, row, column, versions, {})
         else:
             if not isinstance(timestamp, Integral):
                 raise TypeError("'timestamp' must be an integer")
             cells = self.connection.client.getVerTs(
-                self.name, row, column, timestamp, versions)
+                self.name, row, column, timestamp, versions, {})
 
         return [
             (c.value, c.timestamp) if include_timestamp else c.value
@@ -197,12 +198,10 @@ class Table(object):
         by this scanner will be retrieved in sorted order, and the data
         will be stored in `OrderedDict` instances.
 
-        If `reverse` is `True`, the scanner will perform the scan in reverse.
-        This means that `row_start` must be lexicographically after `row_stop`.
-        Note that the start of the range is inclusive, while the end is
-        exclusive just as in the forward scan.
-
         **Compatibility notes:**
+
+        * The `reverse` argument is only available when using HBase 0.98
+          (or up).
 
         * The `filter` argument is only available when using HBase 0.92
           (or up). In HBase 0.90 compatibility mode, specifying
@@ -210,9 +209,6 @@ class Table(object):
 
         * The `sorted_columns` argument is only available when using
           HBase 0.96 (or up).
-
-        * The `reverse` argument is only available when using HBase 0.98
-          (or up).
 
         :param str row_start: the row key to start at (inclusive)
         :param str row_stop: the row key to stop at (exclusive)
@@ -252,7 +248,6 @@ class Table(object):
                 raise TypeError(
                     "'row_prefix' cannot be combined with 'row_start' "
                     "or 'row_stop'")
-
             if reverse:
                 row_start = bytes_increment(row_prefix)
                 row_stop = row_prefix
@@ -260,27 +255,46 @@ class Table(object):
                 row_start = row_prefix
                 row_stop = bytes_increment(row_prefix)
 
-        if row_start is None:
-            row_start = ''
+        if self.connection.compat == '0.90':
+            # The scannerOpenWithScan() Thrift function is not
+            # available, so work around it as much as possible with the
+            # other scannerOpen*() Thrift functions
+            if filter is not None:
+                raise NotImplementedError(
+                    "'filter' is not supported in HBase 0.90")
 
-        if filter is not None:
-            raise NotImplementedError(
-                "'filter' is not supported in HBase 0.90")
+            if row_start is None:
+                row_start = ''
 
-        if row_stop is None:
-            if timestamp is None:
-                scan_id = self.connection.client.scannerOpen(
-                    self.name, row_start, columns)
+            if row_stop is None:
+                if timestamp is None:
+                    scan_id = self.connection.client.scannerOpen(
+                        self.name, row_start, columns, {})
+                else:
+                    scan_id = self.connection.client.scannerOpenTs(
+                        self.name, row_start, columns, timestamp, {})
             else:
-                scan_id = self.connection.client.scannerOpenTs(
-                    self.name, row_start, columns, timestamp)
+                if timestamp is None:
+                    scan_id = self.connection.client.scannerOpenWithStop(
+                        self.name, row_start, row_stop, columns, {})
+                else:
+                    scan_id = self.connection.client.scannerOpenWithStopTs(
+                        self.name, row_start, row_stop, columns, timestamp, {})
         else:
-            if timestamp is None:
-                scan_id = self.connection.client.scannerOpenWithStop(
-                    self.name, row_start, row_stop, columns)
-            else:
-                scan_id = self.connection.client.scannerOpenWithStopTs(
-                    self.name, row_start, row_stop, columns, timestamp)
+            scan = TScan(
+                startRow=row_start,
+                stopRow=row_stop,
+                timestamp=timestamp,
+                columns=columns,
+                caching=batch_size,
+                filterString=filter,
+                batchSize=scan_batching,
+                sortColumns=sorted_columns,
+                reversed=reverse,
+            )
+            scan_id = self.connection.client.scannerOpenWithScan(
+                self.name, scan, {})
+
         logger.debug("Opened scanner (id=%d) on '%s'", scan_id, self.name)
 
         n_returned = n_fetched = 0

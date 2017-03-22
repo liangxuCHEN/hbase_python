@@ -8,7 +8,7 @@ from numbers import Integral
 
 import six
 
-from hbase.ttypes import BatchMutation, Mutation
+from hbase_thrift.ttypes import BatchMutation, Mutation
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +56,10 @@ class Batch(object):
         logger.debug("Sending batch for '%s' (%d mutations on %d rows)",
                      self._table.name, self._mutation_count, len(bms))
         if self._timestamp is None:
-            self._table.connection.client.mutateRows(self._table.name, bms)
+            self._table.connection.client.mutateRows(self._table.name, bms, {})
         else:
             self._table.connection.client.mutateRowsTs(
-                self._table.name, bms, self._timestamp)
+                self._table.name, bms, self._timestamp, {})
 
         self._reset_mutations()
 

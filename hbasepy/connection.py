@@ -1,7 +1,6 @@
 # coding: UTF-8
-
 """
-HappyBase connection module.
+hbasepy connection module.
 """
 
 import logging
@@ -12,32 +11,43 @@ from thrift.transport import TTransport
 from thrift.transport import TSocket
 from thrift.protocol import TBinaryProtocol, TCompactProtocol
 
-from hbase import Hbase
-from hbase.ttypes import *
+from hbase_thrift import Hbase
+from hbase_thrift.ttypes import *
 from .tool import *
 
 from .table import Table
 
 logger = logging.getLogger(__name__)
-
+COMPAT_MODES = ('0.90', '0.92', '0.94', '0.96', '0.98', '1.24')
 STRING_OR_BINARY = (six.binary_type, six.text_type)
 
 DEFAULT_HOST = 'localhost'
 DEFAULT_PORT = 9090
 DEFAULT_PROTOCOL = 'binary'
-
+DEFAULT_COMPAT = '0.98'
 
 class Connection(object):
     """Connection to an HBase Thrift server.
+
+    :param str host: The host to connect to
+    :param int port: The port to connect to
+    :param bool autoconnect: Whether the connection should be opened directly
+    :param str compat: Compatibility mode (optional)
     """
 
-    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, autoconnect=True, protocol=DEFAULT_PROTOCOL):
+    def __init__(self, host=DEFAULT_HOST, port=DEFAULT_PORT, autoconnect=True,timeout=None,
+                 protocol=DEFAULT_PROTOCOL,compat=DEFAULT_COMPAT):
 
         # Allow host and port to be None, which may be easier for
         # applications wrapping a Connection instance.
+        if compat not in COMPAT_MODES:
+            raise ValueError("'compat' must be one of %s"
+                             % ", ".join(COMPAT_MODES))
         self.host = host or DEFAULT_HOST
         self.port = port or DEFAULT_PORT
         self._protocol = protocol
+        self.timeout = timeout
+        self.compat = compat
         self._refresh_thrift_client()
         self._transport_is_open = False
 
@@ -49,6 +59,9 @@ class Connection(object):
     def _refresh_thrift_client(self):
         """Refresh the Thrift socket, transport, and client."""
         socket = TSocket.TSocket(host=self.host, port=self.port)
+        if self.timeout:
+            socket.setTimeout(self.timeout)
+
         self.transport = TTransport.TBufferedTransport(socket)
 
         if self._protocol == 'binary':

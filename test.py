@@ -1,4 +1,6 @@
 # encoding=utf-8
+import random
+import threading
 from nose.tools import (
     assert_in,
     assert_is_instance,
@@ -6,17 +8,18 @@ from nose.tools import (
     assert_raises,
     assert_equal
 )
-from hbasepy import Connection
+from hbasepy import Connection, ConnectionPool, NoConnectionsAvailable
 import six
 
-HAPPYBASE_HOST = 'master'
-HAPPYBASE_PORT = 9090
-
+HBASE_HOST = 'master'
+HBASE_PORT = 9090
+HbASE_COMPAT = '1.24'
 TEST_TABLE_NAME = 'students'
 
 connection_kwargs = dict(
-    host=HAPPYBASE_HOST,
-    port=HAPPYBASE_PORT,
+    host=HBASE_HOST,
+    port=HBASE_PORT,
+    compat=HbASE_COMPAT,
 )
 
 connection = table = None
@@ -189,6 +192,115 @@ def test_cells(table_name):
     print(results)
 
 
+def test_scan(table_name):
+    table_tmp = connection.table(table_name)
+    with assert_raises(ValueError):
+        list(table_tmp.scan(limit=0))
+
+    scanner = table_tmp.scan(row_start=b'row-batch1-000', row_stop=b'row-batch1-005')
+    print(list(scanner))
+
+    scanner = table_tmp.scan(row_prefix=b'row-batch1-', reverse=True)
+    key, value = next(scanner)
+    print(key, value)
+
+    key, value = list(scanner)[-1]
+    print(key, value)
+
+
+def test_scan_filter_and_batch_size(table_name):
+    table_tmp = connection.table(table_name)
+    filter = b"SingleColumnValueFilter ('basicInfo', 'age', =, 'binary:16')"
+    for k, v in table_tmp.scan(filter=filter):
+        print(k, v)
+
+
+def test_delete(table_name):
+    row_key = b'May'
+    table_tmp = connection.table(table_name)
+
+    table_tmp.put(row_key, {b'moreInfo:teacher': b'Alie', b'basicInfo:sex': b'man'})
+    print(table_tmp.row(row_key))
+
+    table_tmp.delete(row_key, [b'moreInfo:teacher'])
+    print(table_tmp.row(row_key))
+
+    table_tmp.delete(row_key, timestamp=12345)
+    print(table_tmp.row(row_key))
+
+    table_tmp.delete(row_key)
+    print(table_tmp.row(row_key))
+
+
+def test_connection_pool():
+
+    from thrift.Thrift import TException
+
+    def run():
+        name = threading.current_thread().name
+        print("Thread %s starting" % name)
+
+        def inner_function():
+            # Nested connection requests must return the same connection
+            with pool.connection() as another_connection:
+                assert connection is another_connection
+
+                # Fake an exception once in a while
+                if random.random() < .25:
+                    print("Introducing random failure")
+                    connection.transport.close()
+                    raise TException("Fake transport exception")
+
+        for i in range(50):
+            with pool.connection() as connection:
+                connection.tables()
+
+                try:
+                    inner_function()
+                except TException:
+                    # This error should have been picked up by the
+                    # connection pool, and the connection should have
+                    # been replaced by a fresh one
+                    pass
+
+                connection.tables()
+
+        print("Thread %s done" % name)
+
+    N_THREADS = 10
+
+    pool = ConnectionPool(size=3, **connection_kwargs)
+    threads = [threading.Thread(target=run) for i in range(N_THREADS)]
+
+    for t in threads:
+        t.start()
+
+    while threads:
+        for t in threads:
+            t.join(timeout=.1)
+
+        # filter out finished threads
+        threads = [t for t in threads if t.is_alive()]
+        print("%d threads still alive" % len(threads))
+
+
+def test_pool_exhaustion():
+    pool = ConnectionPool(size=1, **connection_kwargs)
+
+    def run():
+        with assert_raises(NoConnectionsAvailable):
+            with pool.connection(timeout=0.3) as connection:
+                connection.tables()
+
+    with pool.connection():
+        # At this point the only connection is assigned to this thread,
+        # so another thread cannot obtain a connection at this point.
+
+        t = threading.Thread(target=run)
+        t.start()
+        t.join()
+
+
 if __name__ == '__main__':
     import logging
     logging.basicConfig(level=logging.DEBUG)
@@ -206,6 +318,10 @@ if __name__ == '__main__':
     # test_batch('mytable')
     # test_batch_context_managers('mytable')
     # test_cells('table2')
-
+    # test_scan('mytable')
+    # test_scan_filter_and_batch_size('students')
+    # test_delete('students')
+    # test_connection_pool()
+    # test_pool_exhaustion()
 
 
